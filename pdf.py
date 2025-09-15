@@ -3,86 +3,81 @@ import streamlit as st
 from dotenv import load_dotenv
 from pypdf import PdfReader
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.chains.question_answering import load_qa_chain
-from langchain.prompts import PromptTemplate
-from langchain_community.embeddings import HuggingFaceEmbeddings
 
-# ✅ Load environment variables
+# Load environment variables
 load_dotenv()
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
-# ✅ Initialize LLM (text-only model)
+# Initialize LLM (text-only model)
 llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
 
-def get_pdf_text(pdf_docs):
+# ---- Functions ---- #
+def extract_pdf_text(uploaded_file):
+    """Extract text from all pages of a PDF."""
+    pdf_reader = PdfReader(uploaded_file)
     text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
-    return text
+    for page in pdf_reader.pages:
+        text += page.extract_text() or ""
+    return text.strip()
 
-def get_text_chunks(text):
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=10000, chunk_overlap=1000
+def get_gemini_response(prompt, resume_text, job_description):
+    """Send resume + JD to Gemini model."""
+    response = llm.invoke(
+        [
+            ("system", prompt),
+            ("human", f"Job Description:\n{job_description}"),
+            ("human", f"Resume:\n{resume_text}")
+        ]
     )
-    chunks = text_splitter.split_text(text)
-    return chunks
+    return response.content
 
-def get_vector_store(text_chunks):
-    # ✅ Use HuggingFace embeddings (no quota issue)
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
+# ---- Streamlit App ---- #
+st.set_page_config(page_title="ATS Resume Expert")
+st.header("ATS Resume Analyzer")
 
-def get_conversational_chain():
-    prompt_template = """
-    Answer the question as detailed as possible from the provided context, make sure to provide all the details, 
-    if the answer is not in provided context just say, "answer is not available in the context", 
-    don't provide the wrong answer.\n\n
-    Context:\n {context}\n
-    Question: \n{question}\n
-    Answer:
-    """
+# Job Description input
+job_description = st.text_area("Paste Job Description:", key="jd")
 
-    model = ChatGoogleGenerativeAI(model="gemini-1.5-flash")
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-    return chain
+# Resume upload
+uploaded_file = st.file_uploader("Upload your Resume (PDF)", type=["pdf"])
+resume_text = ""
+if uploaded_file is not None:
+    st.success("PDF Uploaded Successfully")
+    resume_text = extract_pdf_text(uploaded_file)
 
-def user_input(user_question):
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    docs = new_db.similarity_search(user_question)
+# Buttons
+submit1 = st.button("Tell Me About the Resume")
+submit3 = st.button("Percentage Match")
 
-    chain = get_conversational_chain()
-    response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
+# Prompts
+input_prompt1 = """
+You are an experienced Technical HR Manager.
+Review the provided resume against the job description.
+Highlight the candidate's strengths and weaknesses.
+"""
 
-    st.write("Reply: ", response["output_text"])
+input_prompt3 = """
+You are an ATS (Applicant Tracking System) scanner with deep knowledge of data science.
+Evaluate the resume against the job description. 
+Return:
+1. Percentage Match
+2. Missing Keywords
+3. Final Thoughts
+"""
 
-def main():
-    st.set_page_config("Chat PDF")
-    st.header("Chat with PDF using Gemini 💁")
+# Actions
+if submit1:
+    if uploaded_file:
+        response = get_gemini_response(input_prompt1, resume_text, job_description)
+        st.subheader("Response:")
+        st.write(response)
+    else:
+        st.warning("Please upload a resume first!")
 
-    user_question = st.text_input("Ask a Question from the PDF Files")
-
-    if user_question:
-        user_input(user_question)
-
-    with st.sidebar:
-        st.title("Menu:")
-        pdf_docs = st.file_uploader(
-            "Upload your PDF Files and Click on the Submit & Process Button",
-            accept_multiple_files=True
-        )
-        if st.button("Submit & Process"):
-            with st.spinner("Processing..."):
-                raw_text = get_pdf_text(pdf_docs)
-                text_chunks = get_text_chunks(raw_text)
-                get_vector_store(text_chunks)
-                st.success("Done ✅")
-
-if __name__ == "__main__":
-    main()
+elif submit3:
+    if uploaded_file:
+        response = get_gemini_response(input_prompt3, resume_text, job_description)
+        st.subheader("Response:")
+        st.write(response)
+    else:
+        st.warning("Please upload a resume first!")
